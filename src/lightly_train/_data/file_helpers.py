@@ -21,6 +21,7 @@ from torchvision import io
 from torchvision.io import ImageReadMode
 from torchvision.transforms.v2 import functional as F
 
+from lightly_train._env import Env
 from lightly_train.types import (
     ImageFilename,
     NDArrayBBoxes,
@@ -125,6 +126,9 @@ def _get_image_filenames(
 _TORCHVISION_SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
+_DALI_NOT_AVAILABLE_WARNED = False
+
+
 def as_image_tensor(image: PathLike | PILImage | Tensor) -> Tensor:
     """Returns image as (C, H, W) tensor."""
     if isinstance(image, Tensor):
@@ -152,6 +156,31 @@ def open_image_numpy(
     mode: ImageMode = ImageMode.RGB,
 ) -> NDArrayImage:
     """Returns image as (H, W, C) or (H, W) numpy array."""
+
+    global _DALI_NOT_AVAILABLE_WARNED
+
+    if Env.LIGHTLY_TRAIN_ENABLE_DALI.value and mode == ImageMode.RGB:
+        try:
+            from lightly_train._data import dali
+        except ModuleNotFoundError:  # pragma: no cover - module is part of package
+            dali = None
+
+        if dali is not None and dali.is_available():
+            try:
+                image_np = dali.decode_rgb_image(image_path=image_path)
+                return _convert_unsigned_to_signed(image_np)
+            except dali.DaliRuntimeError:
+                logger.debug(
+                    "Decoding image '%s' with NVIDIA DALI failed. Falling back to CPU decoding.",
+                    image_path,
+                )
+        elif not _DALI_NOT_AVAILABLE_WARNED:
+            logger.warning(
+                "LIGHTLY_TRAIN_ENABLE_DALI is set but NVIDIA DALI is not available. "
+                "Falling back to the default image decoder."
+            )
+            _DALI_NOT_AVAILABLE_WARNED = True
+
     image_np: NDArrayImage
     if image_path.suffix.lower() in _TORCHVISION_SUPPORTED_IMAGE_EXTENSIONS:
         try:
@@ -161,6 +190,10 @@ def open_image_numpy(
             image_np = _open_image_numpy__with_pil(image_path=image_path, mode=mode)
     else:
         image_np = _open_image_numpy__with_pil(image_path=image_path, mode=mode)
+    return _convert_unsigned_to_signed(image_np)
+
+
+def _convert_unsigned_to_signed(image_np: NDArrayImage) -> NDArrayImage:
     dtype = image_np.dtype
     if np.issubdtype(dtype, np.unsignedinteger) and dtype != np.uint8:
         # Convert uint16, uint32, uint64 to signed integer type because torch has only

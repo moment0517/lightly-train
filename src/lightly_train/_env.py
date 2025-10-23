@@ -106,6 +106,11 @@ class Env:
         _default=None,
         _type=str,
     )
+    LIGHTLY_TRAIN_ENABLE_DALI: EnvVar[bool] = EnvVar(
+        name="LIGHTLY_TRAIN_ENABLE_DALI",
+        _default=False,
+        _type=lambda x: x.lower() in ("true", "t", "1", "yes", "y"),
+    )
     LIGHTLY_TRAIN_MASK_DIR: EnvVar[Path | None] = EnvVar(
         name="LIGHTLY_TRAIN_MASK_DIR",
         _default=None,
