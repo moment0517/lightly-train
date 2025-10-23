@@ -211,6 +211,77 @@ def test_open_image_numpy(
         torch_spy.assert_not_called()
 
 
+def test_open_image_numpy__dali_enabled(
+    tmp_path: Path, mocker: MockerFixture, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LIGHTLY_TRAIN_ENABLE_DALI", "1")
+    file_helpers._DALI_NOT_AVAILABLE_WARNED = False
+    image_path = tmp_path / "image.jpg"
+    helpers.create_image(path=image_path, height=16, width=16)
+
+    mocker.patch("lightly_train._data.dali.is_available", return_value=True)
+    decode_mock = mocker.patch(
+        "lightly_train._data.dali.decode_rgb_image",
+        return_value=np.zeros((16, 16, 3), dtype=np.uint8),
+    )
+    torch_spy = mocker.spy(file_helpers, "_open_image_numpy__with_torch")
+
+    result = file_helpers.open_image_numpy(image_path=image_path, mode=ImageMode.RGB)
+
+    np.testing.assert_array_equal(result, np.zeros((16, 16, 3), dtype=np.uint8))
+    decode_mock.assert_called_once_with(image_path=image_path)
+    torch_spy.assert_not_called()
+
+
+def test_open_image_numpy__dali_not_available(
+    tmp_path: Path,
+    mocker: MockerFixture,
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LIGHTLY_TRAIN_ENABLE_DALI", "true")
+    file_helpers._DALI_NOT_AVAILABLE_WARNED = False
+    image_path = tmp_path / "image.jpg"
+    helpers.create_image(path=image_path, height=8, width=8)
+
+    mocker.patch("lightly_train._data.dali.is_available", return_value=False)
+    torch_spy = mocker.spy(file_helpers, "_open_image_numpy__with_torch")
+
+    with caplog.at_level("WARNING"):
+        file_helpers.open_image_numpy(image_path=image_path, mode=ImageMode.RGB)
+
+    torch_spy.assert_called_once()
+    assert "NVIDIA DALI is not available" in caplog.text
+    assert file_helpers._DALI_NOT_AVAILABLE_WARNED is True
+
+
+def test_open_image_numpy__dali_failure_falls_back(
+    tmp_path: Path,
+    mocker: MockerFixture,
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LIGHTLY_TRAIN_ENABLE_DALI", "1")
+    file_helpers._DALI_NOT_AVAILABLE_WARNED = False
+    image_path = tmp_path / "image.jpg"
+    helpers.create_image(path=image_path, height=12, width=12)
+
+    from lightly_train._data import dali
+
+    mocker.patch("lightly_train._data.dali.is_available", return_value=True)
+    mocker.patch(
+        "lightly_train._data.dali.decode_rgb_image",
+        side_effect=dali.DaliRuntimeError("boom"),
+    )
+    torch_spy = mocker.spy(file_helpers, "_open_image_numpy__with_torch")
+
+    with caplog.at_level("DEBUG"):
+        file_helpers.open_image_numpy(image_path=image_path, mode=ImageMode.RGB)
+
+    torch_spy.assert_called_once()
+    assert "Decoding image" in caplog.text
+
+
 @pytest.mark.parametrize(
     "dtype, expected_dtype, mode, max_value",
     [(np.uint8, np.uint8, "L", 255), (np.uint16, np.int32, "I;16", 65535)],
